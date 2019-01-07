@@ -238,7 +238,7 @@ bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
         }
 #ifdef USE_REPLY_CHECKSUM
         /*
-         This is a workaround for displays where data reading is possible, but the checksum dosn't match the one returned in reply_data[10].
+         This is a workaround for displays where data reading is possible, but the checksum doesn't match the one returned in reply_data[10].
          For this, we save our own checksum in reply_checksum and compare it with the reply from the next request (and so on).
          If we got a match, we assume the values are correct and so break the loop. --SamanVDR 2019
          */
