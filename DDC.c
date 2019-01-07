@@ -14,6 +14,8 @@
 
 #define kMaxRequests 10
 
+#define USE_REPLY_CHECKSUM 1
+
 /*
  IOFramebufferPortFromCGDisplayID based on: https://github.com/kfix/ddcctl/commit/0d66010890f99aa0972bb1478b41dda6329f52b4
  
@@ -190,7 +192,9 @@ bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
     UInt8 reply_data[11] = {};
     bool result = false;
     UInt8 data[128];
-
+#ifdef USE_REPLY_CHECKSUM
+    int reply_checksum = 0;
+#endif
     for (int i=1; i<=kMaxRequests; i++) {
         bzero(&request, sizeof(request));
         
@@ -220,7 +224,11 @@ bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
         request.replyBytes = sizeof(reply_data);
         
         result = DisplayRequest(displayID, &request);
-        result = (result && reply_data[0] == request.sendAddress && reply_data[2] == 0x2 && reply_data[4] == read->control_id && reply_data[10] == (request.replyAddress ^ request.replySubAddress ^ reply_data[1] ^ reply_data[2] ^ reply_data[3] ^ reply_data[4] ^ reply_data[5] ^ reply_data[6] ^ reply_data[7] ^ reply_data[8] ^ reply_data[9]));
+        result = (result &&
+                  reply_data[0] == request.sendAddress &&
+                  reply_data[2] == 0x2 &&
+                  reply_data[4] == read->control_id &&
+                  reply_data[10] == (request.replyAddress ^ request.replySubAddress ^ reply_data[1] ^ reply_data[2] ^ reply_data[3] ^ reply_data[4] ^ reply_data[5] ^ reply_data[6] ^ reply_data[7] ^ reply_data[8] ^ reply_data[9]));
     
         if (result) { // checksum is ok
             if (i > 1) {
@@ -228,12 +236,30 @@ bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
             }
             break;
         }
-
+#ifdef USE_REPLY_CHECKSUM
+        /*
+         This is a workaround for displays where data reading is possible, but the checksum dosn't match the one returned in reply_data[10].
+         For this, we save our own checksum in reply_checksum and compare it with the reply from the next request (and so on).
+         If we got a match, we assume the values are correct and so break the loop. --SamanVDR 2019
+         */
+        result = (reply_data[4] == read->control_id &&
+                  reply_checksum == (reply_data[0] ^ reply_data[1] ^ reply_data[2] ^ reply_data[3] ^ reply_data[4] ^ reply_data[5] ^ reply_data[6] ^ reply_data[7] ^ reply_data[8] ^ reply_data[9]));
+        
+        if (result) { // reply checksum is ok
+            printf("D: reply checksum %d \n", reply_checksum);
+            if (i > 1) {
+                printf("D: Tries required to get data: %d \n", i);
+            }
+            break;
+        }
+        reply_checksum = (reply_data[0] ^ reply_data[1] ^ reply_data[2] ^ reply_data[3] ^ reply_data[4] ^ reply_data[5] ^ reply_data[6] ^ reply_data[7] ^ reply_data[8] ^ reply_data[9]);
+#endif
         if (request.result == kIOReturnUnsupportedMode)
             printf("E: Unsupported Transaction Type! \n");
         
         // reset values and return 0, if data reading fails
         if (i >= kMaxRequests) {
+            read->success = false;
             read->max_value = 0;
             read->current_value = 0;
             printf("E: No data after %d tries! \n", i);
@@ -242,12 +268,20 @@ bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
         
         usleep(40000); // 40msec -> See DDC/CI Vesa Standard - 4.4.1 Communication Error Recovery
     }
+    read->success = true;
     read->max_value = reply_data[7];
     read->current_value = reply_data[9];
     return result;
 }
 
-int SupportedTransactionType() {
+UInt32 SupportedTransactionType() {
+   /*
+     With my setup (Intel HD4600 via displaylink to 'DELL U2515H') the original app failed to read ddc and freezes my system.
+     This happens because AppleIntelFramebuffer do not support kIOI2CDDCciReplyTransactionType.
+     So this version comes with a reworked ddc read function to detect the correct TransactionType.
+     --SamanVDR 2016
+   */
+
     kern_return_t   kr;
     io_iterator_t   io_objects;
     io_service_t    io_service;
@@ -260,7 +294,7 @@ int SupportedTransactionType() {
         return 0;
     }
     
-    UInt64 supportedType = 0;
+    UInt32 supportedType = 0;
     
     while((io_service = IOIteratorNext(io_objects)) != MACH_PORT_NULL)
     {
