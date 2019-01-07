@@ -43,10 +43,6 @@
 #import <AppKit/NSScreen.h>
 #import "DDC.h"
 
-#ifdef BLACKLIST
-NSUserDefaults *defaults;
-int blacklistedDeviceWithNumber;
-#endif
 #ifdef OSD
 bool useOsd;
 #endif
